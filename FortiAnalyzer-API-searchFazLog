@@ -1,0 +1,96 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use Config::JSON;
+use Date::Parse;
+use File::Basename;
+use Getopt::Long;
+use JSON;
+use SOAP::Lite;
+
+my $endDate;
+my $searchCriteria;
+my $startDate;
+GetOptions (
+            "endDate=s"        => \$endDate,
+            "searchCriteria=s" => \$searchCriteria,
+            "startDate=s"      => \$startDate,
+);
+
+if (! $endDate || ! $searchCriteria || ! $startDate) {
+    print "Usage: $0 --startDate=\"1970-01-01 00:00\" --endDate=\"2017-11-06 13:10\" --searchCriteria=\"dstip=127.0.0.1\"\n";
+    exit 1;
+};
+
+my $configFile = dirname($0) . "/" . basename($0) . "-config.json";
+my $config = Config::JSON->new($configFile);
+
+my $adom = $config->get("adom");
+my $deviceName = $config->get("deviceName");
+my $ns = "http://r200806.ws.fmg.fortinet.com/";
+my $password = $config->get("password");
+my $uri = $config->get("uri");
+my $user = $config->get("user");
+
+my $startEpoch = str2time($startDate);
+my $endEpoch = str2time($endDate);
+my $searchCriteriaIncTime = "itime>$startEpoch itime<$endEpoch $searchCriteria";
+
+my $soap  = SOAP::Lite->proxy($uri,timeout => 5000)
+            ->ns($ns)
+            ->on_action( sub { return })
+            ->on_fault(  sub { die("Error SOAPing to $ns. $@ ") });
+
+my $maxNumMatches = 100;
+my $startIndex = 1;
+my $matchesReturned = $maxNumMatches;
+
+while ($matchesReturned == $maxNumMatches) {
+my $data = SOAP::Data->name( servicePass => \SOAP::Data->value(
+                             SOAP::Data->name( userID   => $user,),
+                             SOAP::Data->name( password => $password,),
+                           ),
+           SOAP::Data->name( adom           => $adom),
+           SOAP::Data->name( checkArchive   => 0),
+           SOAP::Data->name( content        => "logs")->type("namesp1:searchContent"),
+           SOAP::Data->name( deviceName     => $deviceName),
+           SOAP::Data->name( format         => "rawFormat")->type("namesp1:logFormats"),
+           SOAP::Data->name( logType        => "traffic")->type("namesp1:logTypes"),
+           SOAP::Data->name( maxNumMatches  => $maxNumMatches),
+           SOAP::Data->name( searchCriteria => $searchCriteriaIncTime),
+           SOAP::Data->name( startIndex     => $startIndex),
+        );
+
+    my $soapCall = $soap->searchFazLog($data);
+    my $searchFazLogResponse = $soapCall->valueof("//searchFazLogResponse");
+    $matchesReturned = $searchFazLogResponse->{'matchesReturned'};
+    my @dataList;
+    my $logObject = $searchFazLogResponse->{'logs'};
+
+    if ($logObject) {
+        my $dataObject = $logObject->{'data'};
+        if ($dataObject) {
+            if(ref($dataObject) eq 'ARRAY') {
+                @dataList = @{$dataObject};
+            } else {
+                push(@dataList,$dataObject)
+            };
+        };
+    };
+
+    foreach my $entry (@dataList) {
+        my $logEntry = $entry->{'logEntry'};
+        my $logEntryRef;
+        my @logEntryList =  split /[\s]/, $logEntry;
+        foreach my $item (@logEntryList) {
+            my ($key,$value)= split(/=/, $item);
+            $logEntryRef->{$key} = $value;
+        };
+        my $jsonText = encode_json($logEntryRef);
+        print "$jsonText\n";
+    };
+
+    $startIndex += $maxNumMatches;
+};

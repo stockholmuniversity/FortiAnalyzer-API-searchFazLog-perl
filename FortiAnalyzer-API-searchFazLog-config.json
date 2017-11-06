@@ -1,0 +1,7 @@
+{
+   "user" : "coolGuy",
+   "password" : "HiNSA",
+   "uri" : "https://127.0.0.1:8080/FortiAnalyserWS",
+   "deviceName" : "firewall1",
+   "adom" : "root",
+}
